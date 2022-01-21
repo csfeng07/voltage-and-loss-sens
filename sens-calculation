@@ -1,0 +1,148 @@
+%% Author:Changsen Feng
+%% Date:Apr.1,2021
+%% index zone
+clc;clear
+[PQ, PV, REF, NONE, BUS_I, BUS_TYPE, PD, QD, GS, BS, BUS_AREA, VM, ...
+    VA, BASE_KV, ZONE, VMAX, VMIN, LAM_P, LAM_Q, MU_VMAX, MU_VMIN] = idx_bus;
+[F_BUS, T_BUS, BR_R, BR_X, BR_B, RATE_A, RATE_B, RATE_C, ...
+    TAP, SHIFT, BR_STATUS, PF, QF, PT, QT, MU_SF, MU_ST, ...
+    ANGMIN, ANGMAX, MU_ANGMIN, MU_ANGMAX] = idx_brch;
+[GEN_BUS, PG, QG, QMAX, QMIN, VG, MBASE, GEN_STATUS, PMAX, PMIN, ...
+    MU_PMAX, MU_PMIN, MU_QMAX, MU_QMIN, PC1, PC2, QC1MIN, QC1MAX, ...
+    QC2MIN, QC2MAX, RAMP_AGC, RAMP_10, RAMP_30, RAMP_Q, APF] = idx_gen;
+%% define Z_bus matrix
+mpc = case33bw;
+bus_num=length(mpc.bus(:,1));
+branch_num=length(mpc.branch(:,1));
+[Ybus, Yf, Yt] = makeYbus(mpc.baseMVA, mpc.bus, mpc.branch);
+YY_full=full(Ybus);% transform it into a full matrix
+slack_num=find(mpc.bus(:,BUS_TYPE)==3);
+YY=YY_full;
+YY(slack_num,:)=[];YY(:,slack_num)=[];
+Z=inv(YY);
+%% 
+VSC_matrix_Preal=zeros((bus_num-1),2*(bus_num-1));% VSC_matrix_Preal=[real imag]
+VSC_matrix_Pimag=zeros((bus_num-1),2*(bus_num-1));% VSC_matrix_Pimag=[real imag]
+B_Preal=zeros((bus_num-1),1);B_Pimag=zeros((bus_num-1),1);
+
+VSC_matrix_Qreal=zeros((bus_num-1),2*(bus_num-1));% VSC_matrix_Qreal=[real imag]
+VSC_matrix_Qimag=zeros((bus_num-1),2*(bus_num-1));% VSC_matrix_Qimag=[real imag]
+B_Qreal=zeros((bus_num-1),1);B_Qimag=zeros((bus_num-1),1);
+%% power flow calculation
+result=runpf(mpc);
+S=-result.bus(:,PD)/mpc.baseMVA -1i*result.bus(:,PQ)/mpc.baseMVA ;
+S(slack_num,:)=[];
+V_full=result.bus(:,VM).*exp(1i*result.bus(:,VA)/180*pi);
+V=V_full;
+V_full_abs=abs(V_full);
+V(slack_num,:)=[];
+V_abs=abs(V);
+%% B.  Voltage Sensitivity Calculation
+sol_1_real=[];sol_1_imag=[];sol_2_real=[];sol_2_imag=[];
+for k=1:bus_num-1
+    %% define zone 
+    VSC_matrix_Preal=zeros((bus_num-1),2*(bus_num-1));% VSC_matrix_Preal=[real imag]
+    VSC_matrix_Pimag=zeros((bus_num-1),2*(bus_num-1));% VSC_matrix_Pimag=[real imag]
+    B_Preal=zeros((bus_num-1),1);B_Pimag=zeros((bus_num-1),1);
+    
+    VSC_matrix_Qreal=zeros((bus_num-1),2*(bus_num-1));% VSC_matrix_Qreal=[real imag]
+    VSC_matrix_Qimag=zeros((bus_num-1),2*(bus_num-1));% VSC_matrix_Qimag=[real imag]
+    B_Qreal=zeros((bus_num-1),1);B_Qimag=zeros((bus_num-1),1);   
+    for i=1:1:bus_num-1
+        %% P
+        VSC_matrix_Preal(i,i)=real(YY_full(i+1,:)*V_full);
+        VSC_matrix_Preal(i,bus_num-1+i)=imag(YY_full(i+1,:)*V_full);
+        VSC_matrix_Pimag(i,i)=imag(YY_full(i+1,:)*V_full);
+        VSC_matrix_Pimag(i,bus_num-1+i)=-real(YY_full(i+1,:)*V_full);
+        %% Q
+        VSC_matrix_Qreal(i,i)=real(YY_full(i+1,:)*V_full);
+        VSC_matrix_Qreal(i,bus_num-1+i)=imag(YY_full(i+1,:)*V_full);
+        VSC_matrix_Qimag(i,i)=imag(YY_full(i+1,:)*V_full);
+        VSC_matrix_Qimag(i,bus_num-1+i)=-real(YY_full(i+1,:)*V_full);
+        
+        for j=1:bus_num-1
+            %% P
+            VSC_matrix_Preal(i,j)=real(conj(V(i))*YY(i,j));
+            VSC_matrix_Preal(i,bus_num-1+j)=-imag(conj(V(i))*YY(i,j));
+            VSC_matrix_Pimag(i,j)=imag(conj(V(i))*YY(i,j));
+            VSC_matrix_Pimag(i,bus_num-1+j)=real(conj(V(i))*YY(i,j));
+            %% Q
+            VSC_matrix_Qreal(i,j)=real(conj(V(i))*YY(i,j));
+            VSC_matrix_Qreal(i,bus_num-1+j)=-imag(conj(V(i))*YY(i,j));
+            VSC_matrix_Qimag(i,j)=imag(conj(V(i))*YY(i,j));
+            VSC_matrix_Qimag(i,bus_num-1+j)=real(conj(V(i))*YY(i,j));
+        end
+        if i==k
+            B_Preal(i)=1;
+            B_Qimag(i)=-1;
+        end
+    end
+    sol_P=linsolve([VSC_matrix_Preal;VSC_matrix_Pimag],[B_Preal;B_Pimag]);
+    sol_Q=linsolve([VSC_matrix_Qreal;VSC_matrix_Qimag],[B_Qreal;B_Qimag]);
+    sol_1_real=[sol_1_real;sol_P(1:bus_num-1)];
+    sol_1_imag=[sol_1_imag;sol_P(bus_num:2*bus_num-2)];
+    sol_2_real=[sol_2_real;sol_Q(1:bus_num-1)];
+    sol_2_imag=[sol_2_imag;sol_Q(bus_num:2*bus_num-2)];
+end
+   sol_1=[ sol_1_real;sol_1_imag]; sol_2=[ sol_2_real;sol_2_imag];
+for i=1:bus_num-1
+    for k=1:1:bus_num-1
+        P_sens(i,k)=sol_1((bus_num-1)*(k-1)+i)+1j*sol_1((bus_num-1)*(bus_num-1)+(bus_num-1)*(k-1)+i);% complex matrix,sensitivities of voltage with respect to P
+        Q_sens(i,k)=sol_2((bus_num-1)*(k-1)+i)+1j*sol_2((bus_num-1)*(bus_num-1)+(bus_num-1)*(k-1)+i);% complex matrix,sensitivities of voltage with respect to Q
+        P_sens_abs(i,k)=1/(mpc.baseMVA*1000)*1/abs(V(i))*real(conj(V(i))*P_sens(i,k));% sensitivities of voltage magnitude with respect to P (KW) and denote the injection as the positive value
+        Q_sens_abs(i,k)=1/(mpc.baseMVA*1000)*1/abs(V(i))*real(conj(V(i))*Q_sens(i,k));% sensitivities of voltage magnitude with respect to Q (KVA) and denote the injection as the positive value
+    end
+end
+%% C.   Loss Sensitivity Calculation
+% find a sub tree
+children=[];
+for i=1:bus_num
+    child_index=find(mpc.branch(:,F_BUS)==i);
+    if isempty(child_index)==1
+        children=[children,i];
+    end
+end
+sub_tree=diag(ones(1,bus_num));
+while isempty(children)~=1
+    parents=[];
+    for j=1:length(children)
+        parent_index= find(mpc.branch(:,T_BUS)==children(j));
+        if isempty(parent_index)~=1
+            sub_tree(mpc.branch(parent_index,F_BUS),children(j))=1;
+            one_index=find(sub_tree(children(j),:)==1);
+            if isempty(one_index)~=1 
+                sub_tree(mpc.branch(parent_index,F_BUS),one_index)=1;
+            end
+            parents=[parents,parent_index];
+        end
+    end
+    children=parents;
+end
+%%
+P_loss_P=sdpvar(branch_num,bus_num-1,'full');P_loss_Q=sdpvar(branch_num,bus_num-1,'full');
+Q_loss_P=sdpvar(branch_num,bus_num-1,'full');Q_loss_Q=sdpvar(branch_num,bus_num-1,'full');
+F=[];
+for k=1:branch_num
+    for j=1:bus_num-1
+        %
+        if k==branch_num
+            F=[F;P_loss_P(k,j)==2*result.branch(k,PF)/mpc.baseMVA*sub_tree(k+1,j+1)*mpc.branch(k,BR_R)/(V_full_abs(k+1)^2)];
+            F=[F;P_loss_Q(k,j)==2*result.branch(k,QF)/mpc.baseMVA*sub_tree(k+1,j+1)*mpc.branch(k,BR_R)/(V_full_abs(k+1)^2)];
+            F=[F;Q_loss_P(k,j)==2*result.branch(k,PF)/mpc.baseMVA*sub_tree(k+1,j+1)*mpc.branch(k,BR_X)/(V_full_abs(k+1)^2)];
+            F=[F;Q_loss_Q(k,j)==2*result.branch(k,QF)/mpc.baseMVA*sub_tree(k+1,j+1)*mpc.branch(k,BR_X)/(V_full_abs(k+1)^2)];
+        else
+            F=[F;P_loss_P(k,j)==(2*result.branch(k,PF)/mpc.baseMVA*(sub_tree(k+1,j+1)+sub_tree(k+1,k+2:bus_num)*P_loss_P(k+1:branch_num,j))+2*result.branch(k,QF)/mpc.baseMVA*sub_tree(k+1,k+2:bus_num)*Q_loss_P(k+1:branch_num,j))*mpc.branch(k,BR_R)/(V_full_abs(k+1)^2)];%p.u.
+            F=[F;P_loss_Q(k,j)==(2*result.branch(k,PF)/mpc.baseMVA*sub_tree(k+1,k+2:bus_num)*P_loss_Q(k+1:branch_num,j)+2*result.branch(k,QF)/mpc.baseMVA*(sub_tree(k+1,j+1)+sub_tree(k+1,k+2:bus_num)*Q_loss_Q(k+1:branch_num,j)))*mpc.branch(k,BR_R)/(V_full_abs(k+1)^2)];%p.u.
+            F=[F;Q_loss_P(k,j)==(2*result.branch(k,PF)/mpc.baseMVA*(sub_tree(k+1,j+1)+sub_tree(k+1,k+2:bus_num)*P_loss_P(k+1:branch_num,j))+2*result.branch(k,QF)/mpc.baseMVA*sub_tree(k+1,k+2:bus_num)*Q_loss_P(k+1:branch_num,j))*mpc.branch(k,BR_X)/(V_full_abs(k+1)^2)];%p.u.
+            F=[F;Q_loss_Q(k,j)==(2*result.branch(k,PF)/mpc.baseMVA*sub_tree(k+1,k+2:bus_num)*P_loss_Q(k+1:branch_num,j)+2*result.branch(k,QF)/mpc.baseMVA*(sub_tree(k+1,j+1)+sub_tree(k+1,k+2:bus_num)*Q_loss_Q(k+1:branch_num,j)))*mpc.branch(k,BR_X)/(V_full_abs(k+1)^2)];%p.u.
+         end
+    end
+end
+ ops=sdpsettings('solver','gurobi');
+ obj=1;
+solu=solvesdp(F,obj,ops);
+%%
+P_loss_P_value=-sum(double(P_loss_P));% denote the injection as the positive value
+P_loss_Q_value=-sum(double(P_loss_Q));% denote the injection as the positive value
+Q_loss_P_value=-sum(double(Q_loss_P));% denote the injection as the positive value
+Q_loss_Q_value=-sum(double(Q_loss_Q));% denote the injection as the positive value
